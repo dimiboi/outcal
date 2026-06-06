@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
     default_start = (today - timedelta(days=365)).isoformat().replace("+00:00", "Z")
     default_end = (today + timedelta(days=180)).isoformat().replace("+00:00", "Z")
 
-    p = argparse.ArgumentParser(description="Fetch /me/calendarView pages into data/graph.json")
+    p = argparse.ArgumentParser(description="Fetch /me/calendarView events into data/graph.jsonl")
     p.add_argument("--start", default=default_start, help="ISO 8601 startDateTime (UTC)")
     p.add_argument("--end", default=default_end, help="ISO 8601 endDateTime (UTC)")
     p.add_argument("--top", type=int, default=100, help="Page size (Graph max 999, but calendarView 504s on large pages over wide windows)")

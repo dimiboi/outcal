@@ -11,7 +11,7 @@ Programmatically query Outlook / Microsoft 365 data (calendar, mail, etc.) via M
 
 Use **Microsoft Graph PowerShell** public client ID (`14d82eec-204b-4c2f-b7e8-296a70dab67e`) with MSAL Python. It's a public native client registered with `http://localhost` redirect, and BCG has it pre-consented for delegated Graph scopes including `Calendars.Read`.
 
-### `graph_token.py`
+### `fetch_calendar.py`
 ```python
 # /// script
 # requires-python = ">=3.10"
@@ -46,19 +46,19 @@ if cache.has_state_changed:
 print(result["access_token"])
 ```
 
-Run with `uv run graph_token.py`. First call opens browser for sign-in; subsequent calls silently refresh from the on-disk cache (refresh tokens valid ~90 days with rolling renewal).
+Run with `uv run fetch_calendar.py`. First call opens browser for sign-in; subsequent calls silently refresh from the on-disk cache (refresh tokens valid ~90 days with rolling renewal).
 
 ### Calling Graph
 
-`graph_token.py` acquires the token and fetches `/me/calendarView` over a window,
+`fetch_calendar.py` acquires the token and fetches `/me/calendarView` over a window,
 writing each event to `data/graph.jsonl` (JSONL — one event object per line).
 
 ```bash
 # All events in a window (default window: -365d to +180d)
-uv run graph_token.py --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
+uv run fetch_calendar.py --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
 
 # Only events in an Outlook category (server-side $filter=categories/any(...))
-uv run graph_token.py --category Travel \
+uv run fetch_calendar.py --category Travel \
   --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
 
 # Inspect the dumped events (one per line)
