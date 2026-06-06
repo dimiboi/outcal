@@ -49,14 +49,26 @@ print(result["access_token"])
 Run with `uv run graph_token.py`. First call opens browser for sign-in; subsequent calls silently refresh from the on-disk cache (refresh tokens valid ~90 days with rolling renewal).
 
 ### Calling Graph
+
+`graph_token.py` acquires the token and fetches `/me/calendarView` over a window,
+writing each raw page to `data/graph.json` (NDJSON — one JSON payload per line).
+
 ```bash
-TOKEN=$(uv run graph_token.py)
-curl -s -G "https://graph.microsoft.com/v1.0/me/events" \
-  --data-urlencode "\$filter=categories/any(c:c eq 'Travel')" \
-  --data-urlencode "\$select=subject,start,end,categories" \
-  --data-urlencode "\$top=100" \
-  -H "Authorization: Bearer $TOKEN" | jq .
+# All events in a window (default window: -365d to +180d)
+uv run graph_token.py --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
+
+# Only events in an Outlook category (server-side $filter=categories/any(...))
+uv run graph_token.py --category Travel \
+  --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
+
+# Inspect / flatten the dumped pages
+jq -s '[.[].value[] | {subject, start: .start.dateTime, categories}]' data/graph.json
 ```
+
+Flags: `--start` / `--end` (ISO 8601 UTC), `--top` (page size), `--category`
+(single Outlook category, filtered server-side). A single-category filter works
+on calendarView without special headers; multiple categories OR'd server-side
+return `ErrorInternalServerError`, so for that case filter client-side with `jq`.
 
 ## What Did Not Work (and Why)
 

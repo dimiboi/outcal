@@ -62,9 +62,18 @@ async def fetch_all(token: str, start_url: str) -> None:
     print(f"wrote {pages} page(s) to {OUT}")
 
 
-def build_url(start: str, end: str, top: int) -> str:
-    qs = urlencode({"startDateTime": start, "endDateTime": end, "$top": top})
-    return f"{GRAPH}/me/calendarView?{qs}"
+def category_filter(category: str | None) -> str | None:
+    if not category:
+        return None
+    safe = category.replace("'", "''")  # OData escapes a single quote by doubling
+    return f"categories/any(c:c eq '{safe}')"
+
+
+def build_url(start: str, end: str, top: int, odata_filter: str | None = None) -> str:
+    params = {"startDateTime": start, "endDateTime": end, "$top": top}
+    if odata_filter:
+        params["$filter"] = odata_filter
+    return f"{GRAPH}/me/calendarView?{urlencode(params)}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,13 +85,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--start", default=default_start, help="ISO 8601 startDateTime (UTC)")
     p.add_argument("--end", default=default_end, help="ISO 8601 endDateTime (UTC)")
     p.add_argument("--top", type=int, default=100, help="Page size (Graph max 999, but calendarView 504s on large pages over wide windows)")
+    p.add_argument("--category", default=None, help="Filter to events in this Outlook category (server-side), e.g. 'Travel'")
     return p.parse_args()
 
 
 async def main() -> None:
     args = parse_args()
     token = get_token()
-    url = build_url(args.start, args.end, args.top)
+    url = build_url(args.start, args.end, args.top, category_filter(args.category))
     print(f"GET {url}")
     await fetch_all(token, url)
 
