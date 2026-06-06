@@ -30,6 +30,7 @@ A **single** `--category` filters server-side. Multiple categories OR'd server-s
 return `ErrorInternalServerError` — for that, fetch unfiltered and filter with `jq`.
 
 ## Gotchas
+- Always run Python via `uv run` (e.g. `uv run python -m py_compile fetch_calendar.py`).
 - Once minted on a registered device, a Graph token is accepted from any IP (the
   audience is `graph.microsoft.com`; CA binds at acquisition, not use).
 
