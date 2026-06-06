@@ -33,11 +33,14 @@ def get_token() -> str:
 
     accounts = app.get_accounts()
     result = app.acquire_token_silent(SCOPES, account=accounts[0]) if accounts else None
-    if not result:
+    if not result or "access_token" not in result:  # cache miss or failed refresh
         result = app.acquire_token_interactive(scopes=SCOPES)
 
     if cache.has_state_changed:
         CACHE.write_text(cache.serialize())
+
+    if "access_token" not in result:
+        raise SystemExit(f"auth failed: {result.get('error_description') or result.get('error') or result}")
 
     return result["access_token"]
 
@@ -45,23 +48,29 @@ def get_token() -> str:
 async def fetch_all(token: str, start_url: str) -> None:
     OUT.parent.mkdir(exist_ok=True)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    tmp = OUT.with_name(OUT.name + ".tmp")  # atomic swap: don't clobber good data on failure
 
     url: str | None = start_url
     pages = 0
     events = 0
-    async with httpx.AsyncClient(timeout=60) as client:
-        with OUT.open("w") as f:
-            while url:
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                payload = resp.json()
-                page_events = payload.get("value", [])
-                for event in page_events:
-                    f.write(json.dumps(event) + "\n")
-                events += len(page_events)
-                pages += 1
-                print(f"page {pages}: {len(page_events)} items")
-                url = payload.get("@odata.nextLink")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            with tmp.open("w") as f:
+                while url:
+                    resp = await client.get(url, headers=headers)
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    page_events = payload.get("value", [])
+                    for event in page_events:
+                        f.write(json.dumps(event) + "\n")
+                    events += len(page_events)
+                    pages += 1
+                    print(f"page {pages}: {len(page_events)} items")
+                    url = payload.get("@odata.nextLink")
+        tmp.replace(OUT)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
     print(f"wrote {events} event(s) across {pages} page(s) to {OUT}")
 
