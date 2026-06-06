@@ -13,7 +13,7 @@ that the token is cached and refreshed silently.
 ## Prerequisites
 
 - **[uv](https://docs.astral.sh/uv/)** — runs the script and resolves its inline
-  dependencies (`msal`, `httpx`). No virtualenv or `pip install` needed.
+  dependencies (`msal`, `httpx`, `tenacity`). No virtualenv or `pip install` needed.
 - **The registered BCG Mac.** Conditional Access binds at token *acquisition*, so
   the first interactive sign-in must happen on the enrolled device. Acquiring from
   anywhere else fails with `AADSTS53003`. (Once minted, the token is accepted from
@@ -45,6 +45,7 @@ The first run opens a browser for sign-in; the token is cached at
 | `--end` | 180 days ahead (UTC, midnight) | ISO 8601 `endDateTime` |
 | `--top` | `100` | Page size. Graph allows up to 999, but `calendarView` returns `504` on large pages over wide windows — keep it modest. |
 | `--category` | none | Restrict to one Outlook category, filtered server-side. |
+| `--max-retries` | `5` | Retry a page on transient errors (`429`/`503`/`504`, timeouts) with exponential backoff that honors `Retry-After`. `0` disables. |
 
 A **single** `--category` is filtered server-side. OR'ing multiple categories
 server-side returns `ErrorInternalServerError` — instead, fetch unfiltered and
@@ -86,8 +87,10 @@ matching delegated scope to `SCOPES` — but today only calendar is wired up.
 
 - **`AADSTS53003` on sign-in** — you're not on the registered BCG Mac, or the device
   fell out of Conditional Access compliance. Acquire the token on the enrolled device.
-- **`504` / timeouts** — the window is too wide for the page size. Lower `--top` or
-  narrow `--start`/`--end`.
+- **`504` / timeouts** — transient ones are retried automatically with exponential
+  backoff (honoring `Retry-After`); tune with `--max-retries`. If they *persist* after
+  retries, the window is too wide for the page size — lower `--top` or narrow
+  `--start`/`--end`.
 - **`ErrorInternalServerError` with categories** — you passed a server-side filter
   that OR's multiple categories. Fetch unfiltered and filter with `jq` instead.
 - **Re-authenticate from scratch** — delete `~/.graph_token_cache.json`.

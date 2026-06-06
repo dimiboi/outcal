@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["msal", "httpx"]
+# dependencies = ["msal", "httpx", "tenacity"]
 # ///
 import argparse
 import asyncio
@@ -11,6 +11,13 @@ from urllib.parse import urlencode
 
 import httpx
 import msal
+from tenacity import (
+    AsyncRetrying,
+    RetryCallState,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"  # Microsoft Graph PowerShell
 TENANT = "2dfb2f0b-4d21-4268-9559-72926144c918"  # BCG
@@ -18,6 +25,7 @@ SCOPES = ["Calendars.Read"]
 CACHE = Path.home() / ".graph_token_cache.json"
 GRAPH = "https://graph.microsoft.com/v1.0"
 OUT = Path("data") / "graph.jsonl"
+RETRYABLE_STATUS = {429, 503, 504}  # rate limit, service unavailable, gateway timeout
 
 
 def get_token() -> str:
@@ -45,7 +53,51 @@ def get_token() -> str:
     return result["access_token"]
 
 
-async def fetch_all(token: str, start_url: str) -> None:
+def _should_retry(exc: BaseException) -> bool:
+    """Retry transient failures only: rate limits, gateway/service errors, and network blips."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in RETRYABLE_STATUS
+    return isinstance(exc, httpx.TransportError)  # timeouts, connection resets, etc.
+
+
+MAX_BACKOFF = 60  # seconds; ceiling for both exponential backoff and Retry-After
+_BACKOFF = wait_exponential(multiplier=1, min=1, max=MAX_BACKOFF)
+
+
+def _wait(retry_state: RetryCallState) -> float:
+    """Honor a numeric Retry-After header (Graph sends it on 429/503); else exponential backoff. Both capped at MAX_BACKOFF."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if isinstance(exc, httpx.HTTPStatusError):
+        retry_after = exc.response.headers.get("Retry-After", "")
+        if retry_after.isdigit():  # numeric seconds; ignore the rarer HTTP-date form
+            return min(float(retry_after), MAX_BACKOFF)
+    return _BACKOFF(retry_state)
+
+
+def _log_retry(retry_state: RetryCallState) -> None:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    reason = f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
+    sleep = retry_state.next_action.sleep if retry_state.next_action else 0.0
+    print(f"  transient failure ({reason}); retrying in {sleep:.1f}s (attempt {retry_state.attempt_number} failed)")
+
+
+async def fetch_page(client: httpx.AsyncClient, url: str, max_retries: int) -> dict:
+    """GET one page, retrying transient errors with backoff. Non-transient errors propagate at once."""
+    async for attempt in AsyncRetrying(
+        stop=stop_after_attempt(max_retries + 1),
+        wait=_wait,
+        retry=retry_if_exception(_should_retry),
+        before_sleep=_log_retry,
+        reraise=True,  # surface the real httpx error, not tenacity's RetryError
+    ):
+        with attempt:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.json()
+    raise RuntimeError("unreachable: AsyncRetrying exits via return or raise")
+
+
+async def fetch_all(token: str, start_url: str, max_retries: int) -> None:
     OUT.parent.mkdir(exist_ok=True)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     tmp = OUT.with_name(OUT.name + ".tmp")  # atomic swap: don't clobber good data on failure
@@ -54,12 +106,10 @@ async def fetch_all(token: str, start_url: str) -> None:
     pages = 0
     events = 0
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, headers=headers) as client:
             with tmp.open("w") as f:
                 while url:
-                    resp = await client.get(url, headers=headers)
-                    resp.raise_for_status()
-                    payload = resp.json()
+                    payload = await fetch_page(client, url, max_retries)
                     page_events = payload.get("value", [])
                     for event in page_events:
                         f.write(json.dumps(event) + "\n")
@@ -89,6 +139,13 @@ def build_url(start: str, end: str, top: int, odata_filter: str | None = None) -
     return f"{GRAPH}/me/calendarView?{urlencode(params)}"
 
 
+def _non_negative_int(value: str) -> int:
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return n
+
+
 def parse_args() -> argparse.Namespace:
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     default_start = (today - timedelta(days=365)).isoformat().replace("+00:00", "Z")
@@ -99,6 +156,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--end", default=default_end, help="ISO 8601 endDateTime (UTC)")
     p.add_argument("--top", type=int, default=100, help="Page size (Graph max 999, but calendarView 504s on large pages over wide windows)")
     p.add_argument("--category", default=None, help="Filter to events in this Outlook category (server-side), e.g. 'Travel'")
+    p.add_argument("--max-retries", type=_non_negative_int, default=5, help="Retry a page up to N times on transient errors (429/503/504, timeouts); 0 disables")
     return p.parse_args()
 
 
@@ -107,7 +165,7 @@ async def main() -> None:
     token = get_token()
     url = build_url(args.start, args.end, args.top, category_filter(args.category))
     print(f"GET {url}")
-    await fetch_all(token, url)
+    await fetch_all(token, url, args.max_retries)
 
 
 if __name__ == "__main__":
