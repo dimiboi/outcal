@@ -17,7 +17,7 @@ TENANT = "2dfb2f0b-4d21-4268-9559-72926144c918"  # BCG
 SCOPES = ["Calendars.Read"]
 CACHE = Path.home() / ".graph_token_cache.json"
 GRAPH = "https://graph.microsoft.com/v1.0"
-OUT = Path("data") / "graph.json"
+OUT = Path("data") / "graph.jsonl"
 
 
 def get_token() -> str:
@@ -48,18 +48,22 @@ async def fetch_all(token: str, start_url: str) -> None:
 
     url: str | None = start_url
     pages = 0
+    events = 0
     async with httpx.AsyncClient(timeout=60) as client:
         with OUT.open("w") as f:
             while url:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
                 payload = resp.json()
-                f.write(json.dumps(payload) + "\n")
+                page_events = payload.get("value", [])
+                for event in page_events:
+                    f.write(json.dumps(event) + "\n")
+                events += len(page_events)
                 pages += 1
-                print(f"page {pages}: {len(payload.get('value', []))} items")
+                print(f"page {pages}: {len(page_events)} items")
                 url = payload.get("@odata.nextLink")
 
-    print(f"wrote {pages} page(s) to {OUT}")
+    print(f"wrote {events} event(s) across {pages} page(s) to {OUT}")
 
 
 def category_filter(category: str | None) -> str | None:

@@ -51,7 +51,7 @@ Run with `uv run graph_token.py`. First call opens browser for sign-in; subseque
 ### Calling Graph
 
 `graph_token.py` acquires the token and fetches `/me/calendarView` over a window,
-writing each raw page to `data/graph.json` (NDJSON — one JSON payload per line).
+writing each event to `data/graph.jsonl` (JSONL — one event object per line).
 
 ```bash
 # All events in a window (default window: -365d to +180d)
@@ -61,8 +61,10 @@ uv run graph_token.py --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
 uv run graph_token.py --category Travel \
   --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
 
-# Inspect / flatten the dumped pages
-jq -s '[.[].value[] | {subject, start: .start.dateTime, categories}]' data/graph.json
+# Inspect the dumped events (one per line)
+jq '{subject, start: .start.dateTime, categories}' data/graph.jsonl
+# Sorted as an array
+jq -s 'sort_by(.start.dateTime) | map({subject, start: .start.dateTime})' data/graph.jsonl
 ```
 
 Flags: `--start` / `--end` (ISO 8601 UTC), `--top` (page size), `--category`
