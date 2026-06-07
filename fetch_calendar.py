@@ -79,7 +79,8 @@ def _log_retry(retry_state: RetryCallState) -> None:
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     reason = f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
     sleep = retry_state.next_action.sleep if retry_state.next_action else 0.0
-    print(f"  transient failure ({reason}); retrying in {sleep:.1f}s (attempt {retry_state.attempt_number} failed)")
+    # stderr, not stdout: --id mode pipes stdout to jq, and retry logs are diagnostics in both modes
+    print(f"  transient failure ({reason}); retrying in {sleep:.1f}s (attempt {retry_state.attempt_number} failed)", file=sys.stderr)
 
 
 async def fetch_page(client: httpx.AsyncClient, url: str, max_retries: int) -> dict:
