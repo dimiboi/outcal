@@ -94,13 +94,6 @@ Pass several ids to fetch them in order. Missing or malformed ids (`ErrorItemNot
 the process exits non-zero if any id failed. Note that ids from `calendarView` are tied
 to a mailbox — they aren't portable across accounts.
 
-One id shape can't be fetched this way: ids containing a `/` (typically recurrence
-exceptions or externally-synced events). Microsoft Graph routes the decoded slash as a
-path separator in `/me/events/{id}` no matter how it's encoded — neither `%2F` nor
-double-encoding works ([MS Q&A](https://learn.microsoft.com/en-us/answers/questions/5516419/how-to-safely-include-slashes-in-graph-api-request)).
-Such ids are skipped with an explanatory message; their full event object is already in
-the `calendarView` dump, so read them from there (e.g. `jq 'select(.id == "…")'`).
-
 `--id` is a standalone lookup mode. The calendarView flags — `--start`, `--end`,
 `--top`, `--category` — only shape the dump query, so passing any of them with `--id`
 is **rejected** with a usage error (exit 2) rather than silently ignored. `--max-retries`
