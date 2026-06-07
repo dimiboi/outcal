@@ -32,6 +32,10 @@ uv run fetch_calendar.py --start 2026-05-06T00:00:00Z --end 2026-06-06T23:59:59Z
 
 # Filter to a single Outlook category (server-side)
 uv run fetch_calendar.py --category Travel
+
+# Look up specific events by id (prints to stdout; does NOT touch data/graph.jsonl)
+uv run fetch_calendar.py --id AAMkAGU2... | jq '{subject, start: .start.dateTime}'
+uv run fetch_calendar.py --id AAMk...1 AAMk...2   # several at once
 ```
 
 The first run opens a browser for sign-in; the token is cached at
@@ -41,6 +45,7 @@ The first run opens a browser for sign-in; the token is cached at
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--id` | none | Look up one or more events by id via [`/me/events/{id}`](https://learn.microsoft.com/en-us/graph/api/event-get) and print each to stdout. A lookup mode, not a dump — see below. Can't combine with the calendarView flags (`--start`/`--end`/`--top`/`--category`). |
 | `--start` | 365 days ago (UTC, midnight) | ISO 8601 `startDateTime` |
 | `--end` | 180 days ahead (UTC, midnight) | ISO 8601 `endDateTime` |
 | `--top` | `100` | Page size. Graph allows up to 999, but `calendarView` returns `504` on large pages over wide windows — keep it modest. |
@@ -71,6 +76,28 @@ jq '{subject, start: .start.dateTime, categories}' data/graph.jsonl
 ```
 
 `data/` is gitignored — calendar contents stay local.
+
+### Fetching by id (`--id`)
+
+`--id` is a non-destructive lookup, not a dump: it prints each requested event as a
+JSON line to **stdout** (same shape as a `graph.jsonl` line) and never writes
+`data/graph.jsonl`, so a one-off lookup can't clobber a full calendar pull. Progress
+and per-id errors go to **stderr**, keeping stdout clean for `jq`. Pull an id straight
+out of the dump:
+
+```bash
+uv run fetch_calendar.py --id "$(jq -r '.id' data/graph.jsonl | head -1)" | jq .
+```
+
+Pass several ids to fetch them in order. Missing or malformed ids (`ErrorItemNotFound`,
+`ErrorInvalidIdMalformed`) are reported on stderr and skipped; the rest still print, and
+the process exits non-zero if any id failed. Note that ids from `calendarView` are tied
+to a mailbox — they aren't portable across accounts.
+
+`--id` is a standalone lookup mode. The calendarView flags — `--start`, `--end`,
+`--top`, `--category` — only shape the dump query, so passing any of them with `--id`
+is **rejected** with a usage error (exit 2) rather than silently ignored. `--max-retries`
+works in both modes and still governs the per-id retry/backoff.
 
 ## How auth works
 

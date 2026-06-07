@@ -5,9 +5,10 @@
 import argparse
 import asyncio
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 import msal
@@ -125,6 +126,42 @@ async def fetch_all(token: str, start_url: str, max_retries: int) -> None:
     print(f"wrote {events} event(s) across {pages} page(s) to {OUT}")
 
 
+def _graph_error_code(exc: httpx.HTTPStatusError) -> str:
+    """Pull Graph's machine-readable error code (e.g. ErrorItemNotFound) out of the body, if any."""
+    try:
+        return exc.response.json().get("error", {}).get("code", "")
+    except (ValueError, AttributeError):  # non-JSON or unexpected shape
+        return ""
+
+
+async def fetch_by_ids(token: str, ids: list[str], max_retries: int) -> None:
+    """Look up specific events via /me/events/{id} and print each as one JSON line to stdout.
+
+    Unlike the calendarView dump this is a non-destructive lookup: it never touches
+    data/graph.jsonl, so a single-event fetch can't clobber a full calendar pull.
+    Diagnostics go to stderr so stdout stays clean JSONL for piping into jq.
+    """
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    failures = 0
+    async with httpx.AsyncClient(timeout=60, headers=headers) as client:
+        for event_id in ids:
+            url = f"{GRAPH}/me/events/{quote(event_id, safe='')}"  # ids hold /,+,= — encode the whole segment
+            print(f"GET {url}", file=sys.stderr)
+            try:
+                event = await fetch_page(client, url, max_retries)
+            except httpx.HTTPStatusError as exc:
+                failures += 1
+                code = _graph_error_code(exc) or "error"
+                print(f"  failed {event_id}: HTTP {exc.response.status_code} {code}", file=sys.stderr)
+                continue
+            print(json.dumps(event))
+
+    fetched = len(ids) - failures
+    print(f"fetched {fetched} of {len(ids)} id(s)", file=sys.stderr)
+    if failures:
+        raise SystemExit(1)
+
+
 def category_filter(category: str | None) -> str | None:
     if not category:
         return None
@@ -147,22 +184,42 @@ def _non_negative_int(value: str) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    default_start = (today - timedelta(days=365)).isoformat().replace("+00:00", "Z")
-    default_end = (today + timedelta(days=180)).isoformat().replace("+00:00", "Z")
-
     p = argparse.ArgumentParser(description="Fetch /me/calendarView events into data/graph.jsonl")
-    p.add_argument("--start", default=default_start, help="ISO 8601 startDateTime (UTC)")
-    p.add_argument("--end", default=default_end, help="ISO 8601 endDateTime (UTC)")
-    p.add_argument("--top", type=int, default=100, help="Page size (Graph max 999, but calendarView 504s on large pages over wide windows)")
-    p.add_argument("--category", default=None, help="Filter to events in this Outlook category (server-side), e.g. 'Travel'")
+    p.add_argument("--id", dest="ids", nargs="+", metavar="ID", help="Look up specific events by id via /me/events/{id} and print them to stdout (does not write data/graph.jsonl)")
+    # The calendarView-query flags default to None, not their real values, so we can tell
+    # "passed" from "omitted" and reject them in --id mode. Real defaults are filled in below.
+    p.add_argument("--start", help="ISO 8601 startDateTime (UTC); default: 365 days ago")
+    p.add_argument("--end", help="ISO 8601 endDateTime (UTC); default: 180 days ahead")
+    p.add_argument("--top", type=int, help="Page size, default 100 (Graph max 999, but calendarView 504s on large pages over wide windows)")
+    p.add_argument("--category", help="Filter to events in this Outlook category (server-side), e.g. 'Travel'")
     p.add_argument("--max-retries", type=_non_negative_int, default=5, help="Retry a page up to N times on transient errors (429/503/504, timeouts); 0 disables")
-    return p.parse_args()
+    args = p.parse_args()
+
+    if args.ids:
+        # --id is a standalone lookup; the calendarView flags don't apply, so reject them
+        # outright rather than silently ignore. --max-retries works in both modes.
+        rejected = {"--start": args.start, "--end": args.end, "--top": args.top, "--category": args.category}
+        passed = [flag for flag, value in rejected.items() if value is not None]
+        if passed:
+            p.error(f"these flags apply to the calendarView query, not --id lookups: {', '.join(passed)}")
+    else:
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        if args.start is None:
+            args.start = (today - timedelta(days=365)).isoformat().replace("+00:00", "Z")
+        if args.end is None:
+            args.end = (today + timedelta(days=180)).isoformat().replace("+00:00", "Z")
+        if args.top is None:
+            args.top = 100
+
+    return args
 
 
 async def main() -> None:
     args = parse_args()
     token = get_token()
+    if args.ids:
+        await fetch_by_ids(token, args.ids, args.max_retries)
+        return
     url = build_url(args.start, args.end, args.top, category_filter(args.category))
     print(f"GET {url}")
     await fetch_all(token, url, args.max_retries)
