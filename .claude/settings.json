@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run fetch_calendar.py:*)"
+      "Bash(uv run fetch_calendar.py:*)",
+      "Bash(uv run python -m py_compile:*)",
+      "Bash(jq:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)"
     ]
   }
 }
