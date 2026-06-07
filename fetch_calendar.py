@@ -146,7 +146,16 @@ async def fetch_by_ids(token: str, ids: list[str], max_retries: int) -> None:
     failures = 0
     async with httpx.AsyncClient(timeout=60, headers=headers) as client:
         for event_id in ids:
-            url = f"{GRAPH}/me/events/{quote(event_id, safe='')}"  # ids hold /,+,= — encode the whole segment
+            if "/" in event_id:
+                # Graph routes a decoded slash as a path separator in /me/events/{id}; neither %2F
+                # nor double-encoding gets through (per MS guidance), so a '/' id can't be fetched
+                # this way. Such ids are usually recurrence exceptions or externally-synced events,
+                # whose full object is already in the calendarView dump. Fail fast with a real reason
+                # rather than a misleading ErrorItemNotFound.
+                failures += 1
+                print(f"  skipped {event_id}: id contains '/', which Graph can't route in /me/events/{{id}} — read this event from the calendarView dump instead", file=sys.stderr)
+                continue
+            url = f"{GRAPH}/me/events/{quote(event_id, safe='')}"  # + and = round-trip fine through single-encoding; / is rejected above
             print(f"GET {url}", file=sys.stderr)
             try:
                 event = await fetch_page(client, url, max_retries)
